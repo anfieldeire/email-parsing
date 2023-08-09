@@ -1,0 +1,214 @@
+//(function runAction(/*GlideRecord*/ current, /*GlideRecord*/ event, /*EmailWrapper*/ email, /*ScopedEmailLogger*/ logger, /*EmailClassifier*/ classifier) {
+// inbound action to parse incoming email	
+// var missingci_sysid = '4652f57cdb8c1380039a777a8c9619ff';
+
+var email_in = email.body_text.trim();
+
+//var short_desc = email_in.substring(0, 1850);
+	
+function get_cinames(){
+	
+	// The regex looks for a string with 'Configuration Item' plus a number at the end like, 'Configuration Item1'
+	// The regex returns those strings in an array into config_strings
+
+    re = /Configuration Item\d+/g;
+	  config_strings = email_in.match(re);
+    gs.log('Count is array all: ' + config_strings);
+    gs.log('Count is length: ' + config_strings.length);	
+
+    ci_names = [];
+	  ci_sysids = [];
+
+  	var config_str = 'Configuration Item';
+	  var next_str = 'Short Description:';
+	  var start_index = 0;
+
+	for (var i=0; i < config_strings.length; i++){
+
+		var index_config = email_in.indexOf(config_strings[i], start_index);
+		gs.log('Config str index_config: ' + index_config);
+
+		var str_endpos = email_in.indexOf( ':', index_config );
+		str_endpos = str_endpos + 1;
+
+		var next_item = config_strings[i + 1];
+		gs.log('Next item: ' + next_item + 'Loop Run: ' + i);
+		var next_index_config = email_in.indexOf(next_item, str_endpos);
+
+		if (next_index_config == -1 || next_index_config == 'undefined'){
+
+				next_index_config = email_in.indexOf(next_str, str_endpos);
+
+			}
+
+		var CI_untrim = email_in.substring(str_endpos, next_index_config);
+		var CI_trim = CI_untrim.trim();
+		var CI = CI_trim.trim();
+
+		gs.log('Config Str This CI Str end index: ' + str_endpos );
+		gs.log('Config Str Next CI Str start index: ' + next_index_config );
+		gs.log('Config Str, This CI: ' + CI + ': ' + i);
+		gs.log('Config Str, CI Length: ' + CI.length);
+
+		start_index = next_index_config;
+
+		ci_names.push(CI);
+
+		}
+	return ci_names;	
+}// get_cinames();	
+
+
+function get_cisysids(){
+	
+	// Input: Take the array of ci names and do lookups against cmdb to find their sysids
+	// If the name doesnt match a CI in the cmdb, use the missingci_sysid and add to the array
+	// Output: An array of sysids
+		
+	ci_names = get_cinames();	
+	gs.log('CI Arr: Print Names: ' + ci_names);
+
+	gs.log('CI Names Length: ' + ci_names.length);	
+
+	for (var j=0; j < ci_names.length; j++){
+
+		var grc = new GlideRecord('cmdb_ci');
+
+			grc.addQuery('name', '=', ci_names[j]);
+			grc.autoSysFields(false);
+			grc.setWorkflow(false);
+			grc.query();
+
+			if (grc.next()){
+
+				var ci_sysid = grc.getValue('sys_id');
+				gs.log('CI Arr found CI: ' + ci_sysid);	
+				ci_sysids.push(ci_sysid);
+
+				}
+
+			else{
+
+				ci_sysid = '4652f57cdb8c1380039a777a8c9619ff';
+				gs.log('CI Arr Missing CI: ' + ci_sysid);
+				ci_sysids.push(ci_sysid);
+				
+			}
+
+		}
+		return ci_sysids;
+	
+} 
+
+function push_to_incident(){
+	
+	//Input: The only fields being parsed are: Assignment group + Configuration Items
+	// Output: Push harcoded fields set above in the drop downs and parsed fields to the incident
+
+	var assignment_group = 'Assignment Group:';
+	var backup_group_sysid = '1039c6b4db805380039a777a8c961912';  // Group A
+	
+	var group_text_start_pos = email_in.indexOf(assignment_group);
+	
+	var group_text_end_pos  = (group_text_start_pos + assignment_group.length + 1);
+	var group_next_string_pos = email_in.indexOf('Configuration Item', group_text_end_pos);
+	var group_name_untrim = email_in.substring(group_text_end_pos, group_next_string_pos);
+	var group_name = group_name_untrim.trim();
+	
+	gs.log('Config str: Group Name' + group_name);
+	gs.log('Config str: Group length' + group_name.length);
+	
+	if (group_text_start_pos > -1) {
+		
+		var grp = new GlideRecord('sys_user_group');
+		
+		grp.addQuery('name', '=', group_name);
+		grp.addQuery('active', '=', 'true');
+		grp.query();
+		
+		if (grp.next()) {
+		
+			var group_sysid = grp.getValue('sys_id');
+			current.assignment_group = group_sysid;
+			current.short_description = "Group A Inbound Email Received See Description"+"\n"+"\n";
+				
+			}
+		
+		else{
+			
+			group_sysid = backup_group_sysid;
+			current.assignment_group = group_sysid;
+			var group_not_found = 'The group named: ' + group_name + ' does not match any active group in servicenow. Assignment group has been set to Group A';
+			current.short_description = "Group A Inbound Email Received See Description"+"\n"+ group_not_found + "\n";
+			
+		}
+		
+		
+	}
+	
+
+	var missingci_sysid = '4652f57cdb8c1380039a777a8c9619ff';
+	
+	var missingci_count = 0;
+	ci_sysids = [];	
+	ci_sysids = get_cisysids();	
+	gs.log('CI Arr Sysids: ' + ci_sysids.length);
+	
+	var arrhas_missingci = ci_sysids.indexOf(missingci_sysid);
+	gs.log('CI ARR: missingci_index ' + arrhas_missingci);
+	
+	var inc_sysid = current.sys_id;	
+	
+	for (var z=0; z < ci_sysids.length; z++){
+	
+		gs.log('CI Arr: Inside last for');
+		gs.log('CI Arr: First Element ' +  ci_sysids[z]);
+		gs.log('CI Arr: First position ' + z);
+		
+		if (arrhas_missingci ==-1 && current.cmdb_ci == ''){
+			
+			current.cmdb_ci = ci_sysids[z];
+			
+			}
+	
+		
+		else if (current.u_missing_ci_details == '' && ci_sysids[z] == missingci_sysid) {
+
+			gs.log('CI Arr: Inside If');
+
+			current.cmdb_ci = missingci_sysid;
+			current.u_missing_ci_details = ci_names[z];
+			
+			gs.log('CI Arr Missing CI First: ' + missingci_sysid);
+
+		}	
+
+		else if	(current.u_missing_ci_details != '' && ci_sysids[z] == missingci_sysid) {
+			gs.log('CI Arr: Inside Else If');
+
+			current.u_missing_ci_details = current.u_missing_ci_details + ', ' + ci_names[z];
+			gs.log('CI Arr Missing CI Second: ' + missingci_sysid);
+
+				}
+
+		else if (ci_sysids[z] != missingci_sysid )  {
+
+			gs.log('CI Arr: Inside Third Else If');
+
+			gs.log('CI Arr: Real CI: ' + ci_sysids[z]);
+
+			var grt_CI = new GlideRecord('task_ci');
+			grt_CI.initialize();	
+			grt_CI.task = inc_sysid;
+			grt_CI.ci_item = ci_sysids[z];
+			grt_CI.insert();
+			}
+                                                          
+		else {
+			gs.log('CI Arr: No conditions met');
+			}		
+	
+	} //end for
+	
+}push_to_incident();
+		
